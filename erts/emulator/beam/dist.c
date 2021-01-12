@@ -23,10 +23,6 @@
  */
 
 
-/* define this to get a lot of debug output */
-/* #define ERTS_DIST_MSG_DBG */
-/* #define ERTS_RAW_DIST_MSG_DBG */
-
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -54,7 +50,7 @@
  * which go on the line. Enabling this may make some testcases
  * fail. Especially the broken dist testcases in distribution_SUITE.
  */
-#if 0
+#if 1
 #define ERTS_DIST_MSG_DBG
 #endif
 #if 0
@@ -2939,6 +2935,129 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
 
 	    if (!erts_is_alive)
 		return ERTS_DSIG_SEND_OK;
+
+/* START OF MODIFICATIONS */
+
+/*
+
+    @todo
+
+    I have access to both ctx->ctl and ctx->msg here,
+    so I can wrap them in a tuple and send them to the
+    distribution driver directly (because we control it),
+    assuming the driver is a process of course.
+
+    Then the message can be sent over the distribution as follow:
+
+    <<131,CtrlIOvec/bits>> = term_to_iovec(Ctrl, [{minor_version, 2}]),
+    <<131,MsgIOvec/bits>> = term_to_iovec(Msg, [{minor_version, 2}]),
+    [
+        <<131,68,0>>,
+        CtrlIOvec,
+        MsgIOvec
+    ]
+
+    There should be no need to handle specially the receiving
+    of packets. They should be able to be fed into the VM's
+    input queue as normal.
+
+*/
+
+	    erts_de_rlock(ctx->dep);
+	    cid = ctx->dep->cid;
+
+//      The node that connects will need to read messages from the queue
+//      before it starts to receive messages directly, because the cid
+//      will be NIL before the connection is fully available.
+//        erts_fprintf(dbg_file, "    CID: %.80T\n", cid);
+
+        if (is_internal_pid(cid)) {
+            Process *to = erts_proc_lookup_raw(cid);
+            ErtsProcLocks locks = ERTS_PROC_LOCK_MAIN;
+            Uint sz_ctl;
+            Uint sz_msg;
+            ErtsMessage* mp;
+            Eterm ctl_copy;
+            Eterm msg_copy;
+            Eterm dist_msg;
+            Eterm* hp;
+            ErlOffHeap *ohp;
+
+            sz_ctl = size_object(ctx->ctl);
+            sz_msg = ctx->msg ? size_object(ctx->msg) : 0;
+            mp = erts_alloc_message_heap(to, &locks,
+                             sz_ctl+sz_msg+3, &hp, &ohp);
+
+            ctl_copy = copy_struct(ctx->ctl, sz_ctl, &hp, ohp);
+            msg_copy = ctx->msg ? copy_struct(ctx->msg, sz_msg, &hp, ohp) : THE_NON_VALUE;
+            dist_msg = ctx->msg ? TUPLE2(hp, ctl_copy, msg_copy)
+                                : TUPLE1(hp, ctl_copy);
+            erts_queue_message(to, locks, mp, dist_msg, am_system);
+
+
+
+
+
+//////            ErtsHeapFactory factory;
+////////            Eterm *hp;
+//////            Process *rp = erts_proc_lookup_raw(cid);
+//////            ErtsProcLocks rp_locks = 0;
+//////            Uint msg_sz;
+//////
+//////            Eterm dist_msg = NIL;
+//////            ErtsMessage *mp = erts_alloc_message(0, NULL);
+//////
+////////            hp = HAlloc(ctx->c_p, 3);
+//////            // @todo OK figure out why ctx->ctl isn't right.
+//////            // It seems the dist_msg is not immediate in which case we
+//////            // probably need to copy it. I have to figure out how or
+//////            // where exactly. There seems to be examples of that in io.c.
+//////
+//////            // @todo I'm not confident about the size.
+//////            msg_sz = 3 + size_object(ctx->ctl) + size_object(ctx->msg);
+//////            dist_msg = TUPLE2(factory.hp, ctx->ctl, ctx->msg);
+//////            (void) erts_factory_message_create(&factory, rp,
+//////                                               &rp_locks, msg_sz);
+//////            dist_msg = copy_struct(dist_msg, msg_sz, &factory.hp, factory.off_heap);
+//////
+////////            erts_fprintf(dbg_file, "   dCTL: %.80T\n", ctx->ctl);
+////////            erts_fprintf(dbg_file, "   dMSG: %.80T\n", dist_msg);
+//////
+//////
+//////    Eterm* hp = erts_produce_heap(factory, ERTS_QUEUE_PORT_SCHED_OP_REPLY_SIZE, 0);
+//////
+////////            dist_msg = TUPLE2(hp, am_system, ctx->msg);
+//////
+//////            erts_queue_message(rp, 0, mp, dist_msg, am_system);
+//////
+//////    Eterm* hp = erts_produce_heap(factory, ERTS_QUEUE_PORT_SCHED_OP_REPLY_SIZE, 0);
+//////    Eterm ref;
+//////
+//////    ref= make_internal_ref(hp);
+//////    write_ref_thing(hp, ref_num[0], ref_num[1], ref_num[2]);
+//////    hp += ERTS_REF_THING_SIZE;
+//////
+//////    msg = TUPLE2(hp, ref, msg);
+//////
+//////    erts_factory_trim_and_close(factory, &msg, 1);
+//////
+//////    erts_queue_message(rp, rp_locks, factory->message, msg,
+//////		       prt ? prt->common.id : am_undefined);
+//////}
+//////
+//////
+
+
+
+
+            erts_de_runlock(ctx->dep);
+
+            return ERTS_DSIG_SEND_OK;
+        }
+
+        erts_de_runlock(ctx->dep);
+
+/* END OF MODIFICATIONS */
 
 	    if (ctx->dflags & DFLAG_DIST_HDR_ATOM_CACHE) {
 		ctx->acmp = erts_get_atom_cache_map(ctx->c_p);
