@@ -50,7 +50,7 @@
  * which go on the line. Enabling this may make some testcases
  * fail. Especially the broken dist testcases in distribution_SUITE.
  */
-#if 1
+#if 0
 #define ERTS_DIST_MSG_DBG
 #endif
 #if 0
@@ -2973,9 +2973,10 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
 
         if (is_internal_pid(cid)) {
             Process *to = erts_proc_lookup_raw(cid);
-            ErtsProcLocks locks = ERTS_PROC_LOCK_MAIN;
+            ErtsProcLocks locks = 0;
             Uint sz_ctl;
             Uint sz_msg;
+            Uint sz_extra;
             ErtsMessage* mp;
             Eterm ctl_copy;
             Eterm msg_copy;
@@ -2983,10 +2984,15 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
             Eterm* hp;
             ErlOffHeap *ohp;
 
+            if (!to) {
+                return ERTS_DSIG_SEND_OK;
+            }
+
             sz_ctl = size_object(ctx->ctl);
             sz_msg = ctx->msg ? size_object(ctx->msg) : 0;
+            sz_extra = ctx->msg ? 3 : 2;
             mp = erts_alloc_message_heap(to, &locks,
-                             sz_ctl+sz_msg+3, &hp, &ohp);
+                             sz_ctl+sz_msg+sz_extra, &hp, &ohp);
 
             ctl_copy = copy_struct(ctx->ctl, sz_ctl, &hp, ohp);
             msg_copy = ctx->msg ? copy_struct(ctx->msg, sz_msg, &hp, ohp) : THE_NON_VALUE;
@@ -2994,6 +3000,7 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
                                 : TUPLE1(hp, ctl_copy);
             erts_queue_message(to, locks, mp, dist_msg, am_system);
 
+            erts_proc_unlock(to, locks);
 
 
 
